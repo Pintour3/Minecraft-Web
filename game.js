@@ -8,6 +8,7 @@ import { PointerLockControls } from "three/examples/jsm/Addons.js";
 import { update } from "three/examples/jsm/libs/tween.module.js";
 import { Box3, Clock } from "three/webgpu";
 import VelocityNode from "three/src/nodes/accessors/VelocityNode.js";
+import {gsap} from "gsap"
 
 const loader = new GLTFLoader()
 
@@ -137,7 +138,7 @@ const playerGeometry = new THREE.BoxGeometry(width,height,width)
 playerGeometry.translate(width/2,height/2,width/2)
 const playerMaterial = new THREE.MeshBasicMaterial({visible:true})
 const player = new THREE.Mesh(playerGeometry,playerMaterial)
-player.position.set(-1,1,0)
+player.position.set(0,1,0)
 scene.add(player)
 player.add(playerCamera)
 playerCamera.position.set(0.3,1.6,0.3)
@@ -161,7 +162,7 @@ window.addEventListener("keyup", (event) => {
 let verticalVelocity = 0;
 const gravity = -25; // block/s^2
 const jumpForce = 8 // m/s
-
+let onGround;
 function animate(){
     
     function updateMovements(camera,speed) {
@@ -180,27 +181,44 @@ function animate(){
         if (keys["a"]) velocity.sub(right);
         if (keys["d"]) velocity.add(right);
         let newSpeed = speed
-        if (keys["w"]&&keys["shift"]) newSpeed*=1.3;
+        if (keys["w"]&&keys["shift"]){
+            newSpeed*=1.3;
+            playerCamera.fov = 80
+            playerCamera.updateProjectionMatrix()
+        } else {
+            playerCamera.fov = 75
+            playerCamera.updateProjectionMatrix()
+        }
         if (velocity.lengthSq() > 0){
             velocity.normalize().multiplyScalar(newSpeed*delta)
         }
-        //déplacement sur coordonée X
+
+        verticalVelocity += gravity * delta //met a jour la gravité
+
+        //déplacement sur coordonée x,y,z
         const vectorX = new THREE.Vector3(velocity.x,0,0);
-        const vectorY = new THREE.Vector3(0,gravity*delta,0)
+        const vectorY = new THREE.Vector3(0,verticalVelocity*delta,0)
         const vectorZ = new THREE.Vector3(0,0,velocity.z) 
         const hitboxTest = {
             x:playerHitbox.clone().translate(vectorX),
-            y:0,
+            y:playerHitbox.clone().translate(vectorY),
             z:playerHitbox.clone().translate(vectorZ),
         }
         
         //walls collisions
         let canMoveX = true;
+        let canMoveY = true;
         let canMoveZ = true;
+        
         collisionCubes.forEach(block=>{
             const box = block.box
             if (hitboxTest.x.intersectsBox(box)) {
                 canMoveX = false
+            }
+            if (hitboxTest.y.intersectsBox(box)){
+                canMoveY = false
+                verticalVelocity = 0; //stop falling
+                onGround = true;
             }
             if (hitboxTest.z.intersectsBox(box)) {
                 canMoveZ = false
@@ -210,13 +228,19 @@ function animate(){
             player.position.x += vectorX.x
             playerHitbox.translate(vectorX) 
         }
+        if (canMoveY) {
+            player.position.y += vectorY.y
+            playerHitbox.translate(vectorY)
+            onGround = false;
+        }
         if (canMoveZ) {
             player.position.z += vectorZ.z
             playerHitbox.translate(vectorZ)
         }
-        //floor collisions --> todo
-
-
+        if (keys[" "] && onGround) {
+            verticalVelocity += jumpForce
+        }
+        
     }
     updateMovements(playerCamera,4.3)
     //stats update
