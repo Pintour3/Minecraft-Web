@@ -2,7 +2,7 @@ import * as THREE from "three"
 import {GLTFLoader} from "three/addons/loaders/GLTFLoader.js";
 import Stats from 'three/addons/libs/stats.module.js';
 import { cameraFar, texture } from "three/tsl";
-import { ThreeMFLoader } from "three/examples/jsm/Addons.js";
+import { ThreeMFLoader, VerticalTiltShiftShader } from "three/examples/jsm/Addons.js";
 import { sortedArray } from "three/src/animation/AnimationUtils.js";
 import { PointerLockControls } from "three/examples/jsm/Addons.js";
 import { update } from "three/examples/jsm/libs/tween.module.js";
@@ -56,6 +56,7 @@ class Block {
         this.y = y
         this.z = z
         this.mesh = null
+        this.box = null
     }
     create(sameTexture = true,topTexture = "",bottomTexture = "",sideTexture = ""){
         function loadColorTexture(path) {
@@ -90,17 +91,21 @@ class Block {
         }
         this.mesh.position.set(this.x,this.y,this.z)
         scene.add(this.mesh)
+        this.box = new THREE.Box3().setFromObject(this.mesh)
+        const helper = new THREE.Box3Helper(this.box,"#ff00ff")
+        scene.add(helper)
+        collisionCubes.push(this)
     }
 }
 //chunk generation
 class Chunk {
-    constructor(originX,originZ){
+    constructor(originX,originY,originZ){
         this.originX = originX
+        this.originY = originY
         this.originZ = originZ
         //2d map
         this.map = []
         this.chunkSize = 16;
-        this.mesh = null;
         this.create()
     }
     //chunk is 16x16
@@ -109,23 +114,21 @@ class Chunk {
         for (let x = 0; x <= 16; x ++) {
             this.map[x] = []
             for (let z = 0;z <=16;z ++){
-                const block =  new Block(this.originX*this.chunkSize+x,0,this.originZ*this.chunkSize + z)
+                const block =  new Block(this.originX*this.chunkSize+x,this.originY,this.originZ*this.chunkSize + z)
                 block.create(true,"/textures/assets/minecraft/textures/block/dirt.png")
-
             }
         }
     }
 }
 //cube collision
-var block = new Block(3,1,0)
+let collisionCubes = []
+
+var block = new Block(3,1,1)
 block.create(false,"/textures/assets/minecraft/textures/block/grass_block_top.png","/textures/assets/minecraft/textures/block/dirt.png","/textures/assets/minecraft/textures/block/grass_block_side.png")
-
 //helper
-const box = new THREE.Box3().setFromObject(block.mesh)
-const helper = new THREE.Box3Helper(box,"#ff00ff")
-scene.add(helper)
 
-new Chunk(0,0)
+
+new Chunk(0,0,0)
 
 //player 
 const height = 1.8
@@ -134,10 +137,11 @@ const playerGeometry = new THREE.BoxGeometry(width,height,width)
 playerGeometry.translate(width/2,height/2,width/2)
 const playerMaterial = new THREE.MeshBasicMaterial({visible:true})
 const player = new THREE.Mesh(playerGeometry,playerMaterial)
-player.position.set(0,1,0)
+player.position.set(-1,1,0)
 scene.add(player)
 player.add(playerCamera)
 playerCamera.position.set(0.3,1.6,0.3)
+playerCamera.rotateY(-Math.PI/2)
 
 //hitbox
 const playerHitbox = new Box3().setFromObject(player)
@@ -153,10 +157,17 @@ window.addEventListener("keyup", (event) => {
     keys[event.key.toLowerCase()] = false;
 });
 
+//vertical movements
+let verticalVelocity = 0;
+const gravity = -25; // block/s^2
+const jumpForce = 8 // m/s
+
 function animate(){
+    
     function updateMovements(camera,speed) {
         const delta = clock.getDelta()
         const velocity = new THREE.Vector3()
+       
         const forward = new THREE.Vector3();
         camera.getWorldDirection(forward);
         forward.y = 0;
@@ -174,30 +185,41 @@ function animate(){
             velocity.normalize().multiplyScalar(newSpeed*delta)
         }
         //déplacement sur coordonée X
-        const hitboxTestX = playerHitbox.clone()
-        const hitboxTestZ = playerHitbox.clone() 
-        const vectorX = new THREE.Vector3(velocity.x,0,0) 
+        const vectorX = new THREE.Vector3(velocity.x,0,0);
+        const vectorY = new THREE.Vector3(0,gravity*delta,0)
         const vectorZ = new THREE.Vector3(0,0,velocity.z) 
-        hitboxTestX.translate(vectorX) 
-        hitboxTestZ.translate(vectorZ) 
-        if (!hitboxTestX.intersectsBox(box)){ 
-            if (!hitboxTestZ.intersectsBox(box)){ 
-                player.position.add(velocity) 
-                playerHitbox.translate(velocity) 
-            } else {
-                player.position.x += velocity.x
-                playerHitbox.translate(vectorX) 
-            }
-        } else {
-            player.position.z += velocity.z
-            playerHitbox.translate(vectorZ) 
+        const hitboxTest = {
+            x:playerHitbox.clone().translate(vectorX),
+            y:0,
+            z:playerHitbox.clone().translate(vectorZ),
         }
+        
+        //walls collisions
+        let canMoveX = true;
+        let canMoveZ = true;
+        collisionCubes.forEach(block=>{
+            const box = block.box
+            if (hitboxTest.x.intersectsBox(box)) {
+                canMoveX = false
+            }
+            if (hitboxTest.z.intersectsBox(box)) {
+                canMoveZ = false
+            }
+        })
+        if (canMoveX) {
+            player.position.x += vectorX.x
+            playerHitbox.translate(vectorX) 
+        }
+        if (canMoveZ) {
+            player.position.z += vectorZ.z
+            playerHitbox.translate(vectorZ)
+        }
+        //floor collisions --> todo
+
+
     }
     updateMovements(playerCamera,4.3)
-   
-    
     //stats update
     stats.update()
     renderer.render(scene, playerCamera)  
 }
-
