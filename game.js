@@ -1,7 +1,7 @@
 import * as THREE from "three"
 import {GLTFLoader} from "three/addons/loaders/GLTFLoader.js";
 import Stats from 'three/addons/libs/stats.module.js';
-import { cameraFar, texture } from "three/tsl";
+import { add, cameraFar, directPointLight, texture } from "three/tsl";
 import { ThreeMFLoader, VerticalTiltShiftShader } from "three/examples/jsm/Addons.js";
 import { sortedArray } from "three/src/animation/AnimationUtils.js";
 import { PointerLockControls } from "three/examples/jsm/Addons.js";
@@ -58,6 +58,8 @@ class Block {
         this.z = z
         this.mesh = null
         this.box = null
+        this.helper = null
+        this.displayHelper = false
     }
     create(sameTexture = true,topTexture = "",bottomTexture = "",sideTexture = ""){
         function loadColorTexture(path) {
@@ -93,8 +95,7 @@ class Block {
         this.mesh.position.set(this.x,this.y,this.z)
         scene.add(this.mesh)
         this.box = new THREE.Box3().setFromObject(this.mesh)
-        const helper = new THREE.Box3Helper(this.box,"#ff00ff")
-        scene.add(helper)
+        this.helper = new THREE.Box3Helper(this.box,"#00ffff")
         collisionCubes.push(this)
     }
 }
@@ -146,7 +147,7 @@ playerCamera.rotateY(-Math.PI/2)
 
 //hitbox
 const playerHitbox = new Box3().setFromObject(player)
-const playerHitboxHelper = new THREE.Box3Helper(playerHitbox,"#ff00f0")
+const playerHitboxHelper = new THREE.Box3Helper(playerHitbox,"#ff00ff")
 scene.add(playerHitboxHelper)
 
 //inputs
@@ -157,16 +158,25 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("keyup", (event) => {
     keys[event.key.toLowerCase()] = false;
 });
-
+const click = {}
+window.addEventListener("mousedown",(event)=>{
+    click[event.button.toString()] = true})
+window.addEventListener("mouseup",(event)=>{
+    click[event.button.toString()] = false
+})
 //vertical movements
 let verticalVelocity = 0;
 const gravity = -25; // block/s^2
 const jumpForce = 8 // m/s
+let breakInterval = 0.2 //s
 let onGround;
+let previousTargetBox;
 function animate(){
-    
+    let delta = clock.getDelta()
+    delta = Math.min(delta,0.05) //prevent delta from being too big, otherwise it avoids Y axis collisions during fps drop
+
+    //movements and collisions
     function updateMovements(camera,speed) {
-        const delta = clock.getDelta()
         const velocity = new THREE.Vector3()
        
         const forward = new THREE.Vector3();
@@ -240,9 +250,75 @@ function animate(){
         if (keys[" "] && onGround) {
             verticalVelocity += jumpForce
         }
-        
     }
     updateMovements(playerCamera,4.3)
+
+    //break and place block
+    const raycaster = new THREE.Raycaster()
+    function raycast(){
+        const playerPos = player.position.clone().add(playerCamera.position) //origin
+        const direction = new THREE.Vector3() //direction
+        playerCamera.getWorldDirection(direction) //get direction from camera
+        raycaster.set(playerPos,direction) //set a raycaster from origin following direction
+        raycaster.far = 5 //length of the raycast
+        const blocksIntersect = raycaster.intersectObjects(collisionCubes.map(block => block.mesh)) //raycast only works with mesh (not box3D)
+        const blockIntersect = blocksIntersect[0] //block target by raycast
+        let originBlock;
+        if (blockIntersect) {
+            originBlock = collisionCubes.find(block=>block.mesh === blockIntersect.object)//the real block from the list
+        }
+       
+        //draw ray
+        return originBlock
+    }
+    let targetBlock = raycast()
+    //bordure au survol du bloc
+    function removeHelper(){
+        let liste = collisionCubes.filter(block=>block.displayHelper == true) //on cherche dans la base de block si il y en à un qui a un helper actif
+        liste.forEach(block=>{ //on les retire
+            block.displayHelper = false
+            scene.remove(block.helper)
+        })
+    }
+    function addHelper(){
+        const border = targetBlock.helper //on en fabrique un
+        scene.add(border) //on l'ajoute
+        targetBlock.displayHelper = true //et on signale à l'objet que ses bordures sont actives
+    }
+    if (targetBlock) { //si il y a un bloc en cible
+        if (!previousTargetBox || previousTargetBox == targetBlock) { 
+            previousTargetBox = targetBlock //on le stock si c'est pas le meme
+            addHelper()
+        } else {
+            removeHelper()
+            addHelper()
+        }
+    } else {
+        if (previousTargetBox) { //si il n'y a pas de bloc en cible mais qu'il y en avait un avant
+            removeHelper()
+            previousTargetBox = null 
+        }
+    }
+    //left click event on block
+    breakInterval -= delta
+    breakInterval = Math.max(breakInterval,-0.5)
+    console.log(breakInterval)
+    if (click[0]) {
+        console.log("left")
+        if (targetBlock) {
+            if (breakInterval < 0) {
+                breakInterval = 0.2
+                let index = collisionCubes.indexOf(targetBlock)
+                collisionCubes.splice(index,1)
+                scene.remove(targetBlock.mesh)
+                scene.remove(targetBlock.helper)
+                scene.remove(targetBlock.box)
+            };
+        }
+    } 
+    if (click[2]) {
+        console.log("right")
+    }
     //stats update
     stats.update()
     renderer.render(scene, playerCamera)  
