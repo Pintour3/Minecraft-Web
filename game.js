@@ -1,7 +1,7 @@
 import * as THREE from "three"
 import {GLTFLoader} from "three/addons/loaders/GLTFLoader.js";
 import Stats from 'three/addons/libs/stats.module.js';
-import { add, cameraFar, directPointLight, texture } from "three/tsl";
+import { add, cameraFar, directPointLight, orthographicDepthToViewZ, texture, textureLoad } from "three/tsl";
 import { ThreeMFLoader, VerticalTiltShiftShader } from "three/examples/jsm/Addons.js";
 import { sortedArray } from "three/src/animation/AnimationUtils.js";
 import { PointerLockControls } from "three/examples/jsm/Addons.js";
@@ -9,6 +9,9 @@ import { update } from "three/examples/jsm/libs/tween.module.js";
 import { Box3, Clock } from "three/webgpu";
 import VelocityNode from "three/src/nodes/accessors/VelocityNode.js";
 import {gsap} from "gsap"
+import { HUD } from "./HUD";
+const {sceneHUD, orthoCamera, hotbarSquare} = HUD()
+let {hotbarPos} = HUD()
 
 const loader = new GLTFLoader()
 
@@ -18,7 +21,6 @@ const textureLoader = new THREE.TextureLoader();
 
 //scene init
 const scene = new THREE.Scene(); 
-
 //clock
 const clock = new THREE.Clock();
 
@@ -50,6 +52,8 @@ renderer.setAnimationLoop(animate)
 const canvas = renderer.domElement
 canvas.tabIndex = 0
 document.body.appendChild(canvas)
+
+
 
 class Block {
     constructor(x,y,z) {
@@ -124,11 +128,26 @@ class Chunk {
 }
 //cube collision
 let collisionCubes = []
+//crackMaterial
+const crackList = []
+for (let elt = 0;elt <= 9;elt ++ ){
+    const texture = textureLoader.load(`/textures/assets/minecraft/textures/block/destroy_stage_${elt}.png`)
+    texture.magFilter = THREE.NearestFilter
+    texture.minFilter = THREE.NearestFilter
+    texture.generateMipmaps = false
+    const material = new THREE.MeshBasicMaterial({
+        map:texture,
+        transparent:true,
+        premultipliedAlpha: true,
+        depthWrite:false, //éviter les bug,
+        blending: THREE.MultiplyBlending
+    });
+    crackList.push(material)
+}
+
 
 var block = new Block(3,1,1)
 block.create(false,"/textures/assets/minecraft/textures/block/grass_block_top.png","/textures/assets/minecraft/textures/block/dirt.png","/textures/assets/minecraft/textures/block/grass_block_side.png")
-//helper
-
 
 new Chunk(0,0,0)
 
@@ -164,13 +183,29 @@ window.addEventListener("mousedown",(event)=>{
 window.addEventListener("mouseup",(event)=>{
     click[event.button.toString()] = false
 })
+const scroll = {}
+window.addEventListener("wheel",(event)=>{
+    if (event.deltaY < 0) {
+        scroll["up"] = true
+    } else if (event.deltaY > 0)  {
+        scroll["down"] = true
+    }
+})
+
+
 //vertical movements
 let verticalVelocity = 0;
 const gravity = -25; // block/s^2
 const jumpForce = 8 // m/s
-let breakInterval = 0.2 //s
+
 let onGround;
 let previousTargetBox;
+
+let breakingDuration = 0.75
+let breakingTime = breakingDuration;
+let previousCrackIndex;
+let crackMesh = null;
+
 function animate(){
     let delta = clock.getDelta()
     delta = Math.min(delta,0.05) //prevent delta from being too big, otherwise it avoids Y axis collisions during fps drop
@@ -253,7 +288,7 @@ function animate(){
     }
     updateMovements(playerCamera,4.3)
 
-    //break and place block
+    // and place block
     const raycaster = new THREE.Raycaster()
     function raycast(){
         const playerPos = player.position.clone().add(playerCamera.position) //origin
@@ -273,53 +308,89 @@ function animate(){
     }
     let targetBlock = raycast()
     //bordure au survol du bloc
-    function removeHelper(){
-        let liste = collisionCubes.filter(block=>block.displayHelper == true) //on cherche dans la base de block si il y en à un qui a un helper actif
-        liste.forEach(block=>{ //on les retire
-            block.displayHelper = false
-            scene.remove(block.helper)
-        })
-    }
-    function addHelper(){
-        const border = targetBlock.helper //on en fabrique un
-        scene.add(border) //on l'ajoute
-        targetBlock.displayHelper = true //et on signale à l'objet que ses bordures sont actives
+    //si il y a un help précédent et si il avait un helper
+    if (previousTargetBox && previousTargetBox.displayHelper) { 
+        previousTargetBox.displayHelper = false //on supprime 
+        scene.remove(previousTargetBox.helper)
     }
     if (targetBlock) { //si il y a un bloc en cible
-        if (!previousTargetBox || previousTargetBox == targetBlock) { 
-            previousTargetBox = targetBlock //on le stock si c'est pas le meme
-            addHelper()
-        } else {
-            removeHelper()
-            addHelper()
+        previousTargetBox = targetBlock
+        if (!targetBlock.displayHelper) { //s'il n'y a pas de helper
+            scene.add(targetBlock.helper)
+            targetBlock.displayHelper = true
         }
     } else {
-        if (previousTargetBox) { //si il n'y a pas de bloc en cible mais qu'il y en avait un avant
-            removeHelper()
-            previousTargetBox = null 
-        }
+        previousTargetBox = null //si aucun bloc n'es dans le focus
     }
     //left click event on block
-    breakInterval -= delta
-    breakInterval = Math.max(breakInterval,-0.5)
-    console.log(breakInterval)
+    //no tools at the moment
+
     if (click[0]) {
-        console.log("left")
-        if (targetBlock) {
-            if (breakInterval < 0) {
-                breakInterval = 0.2
-                let index = collisionCubes.indexOf(targetBlock)
-                collisionCubes.splice(index,1)
-                scene.remove(targetBlock.mesh)
-                scene.remove(targetBlock.helper)
-                scene.remove(targetBlock.box)
-            };
+        if (targetBlock && targetBlock === previousTargetBox) {
+            if(breakingTime > 0) {
+                const progress = (breakingDuration - breakingTime) / breakingDuration // 0 --> 1
+                let crackIndex = Math.floor(progress*crackList.length)
+                crackIndex = Math.min(crackIndex,crackList.length - 1) // 0 --> 9
+                breakingTime -= delta;
+                if (previousCrackIndex !== crackIndex) {
+                    previousCrackIndex = crackIndex
+                    if (previousCrackIndex == crackList.length - 1) {
+                        scene.remove(crackMesh)
+                        scene.remove(targetBlock.mesh)
+                        const index = collisionCubes.indexOf(targetBlock)
+                        collisionCubes.splice(index,1)
+                        crackMesh = null;
+                        breakingTime = breakingDuration
+
+                        return;
+                    } else {
+                        if (!crackMesh) {
+                            crackMesh = new THREE.Mesh(targetBlock.mesh.geometry,crackList[crackIndex])
+                            crackMesh.position.copy(targetBlock.mesh.position)
+                            crackMesh.renderOrder = 999;
+                            scene.add(crackMesh)
+                        } else {
+                            crackMesh.material = crackList[crackIndex];
+                            crackMesh.material.needsUpdate = true
+                        }
+                    }
+                    
+                }
+            }
         }
     } 
     if (click[2]) {
         console.log("right")
     }
+
+    //hotbar square move
+    if (scroll["up"]){
+        scroll["up"] = false
+        if (hotbarPos >= 9){
+            hotbarPos = 1
+        } else {
+            hotbarPos ++
+        }
+        hotbarSquare.newPos(25*(-10 + hotbarPos*2) - 1,window.innerHeight-3)
+        } 
+    if (scroll["down"]){
+        scroll["down"] = false
+        if (hotbarPos <= 1) {
+            hotbarPos = 9
+        } else {
+            hotbarPos --
+        }
+
+        hotbarSquare.newPos(25*(-10 + hotbarPos*2) - 1,window.innerHeight-3)
+    }
+
     //stats update
     stats.update()
-    renderer.render(scene, playerCamera)  
+    renderer.autoClear = false //prevent the autoclear
+    //main scene and 3d render
+    renderer.clear() //clear scene
+    renderer.render(scene, playerCamera)
+    //2D scene render (hud and stuffs)
+    renderer.clearDepth() //fixes
+    renderer.render(sceneHUD, orthoCamera)
 }
