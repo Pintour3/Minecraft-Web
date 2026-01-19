@@ -147,9 +147,17 @@ for (let elt = 0;elt <= 9;elt ++ ){
 
 
 var block = new Block(3,1,1)
-block.create(false,"/textures/assets/minecraft/textures/block/grass_block_top.png","/textures/assets/minecraft/textures/block/dirt.png","/textures/assets/minecraft/textures/block/grass_block_side.png")
+block.create(
+    false,
+    "/textures/assets/minecraft/textures/block/grass_block_top.png",
+    "/textures/assets/minecraft/textures/block/dirt.png",
+    "/textures/assets/minecraft/textures/block/grass_block_side.png"
+)
 
 new Chunk(0,0,0)
+new Chunk(0,0,1)
+new Chunk(1,0,0)
+new Chunk(0,0,-1)
 
 //player 
 const height = 1.8
@@ -201,11 +209,13 @@ const jumpForce = 8 // m/s
 let onGround;
 let previousTargetBox;
 
+//breaking animation
 let breakingDuration = 0.75
 let breakingTime = breakingDuration;
 let previousCrackIndex;
 let crackMesh = null;
 
+let leftClickReleased = true;
 function animate(){
     let delta = clock.getDelta()
     delta = Math.min(delta,0.05) //prevent delta from being too big, otherwise it avoids Y axis collisions during fps drop
@@ -288,7 +298,7 @@ function animate(){
     }
     updateMovements(playerCamera,4.3)
 
-    // and place block
+    // and place block  
     const raycaster = new THREE.Raycaster()
     function raycast(){
         const playerPos = player.position.clone().add(playerCamera.position) //origin
@@ -298,15 +308,15 @@ function animate(){
         raycaster.far = 5 //length of the raycast
         const blocksIntersect = raycaster.intersectObjects(collisionCubes.map(block => block.mesh)) //raycast only works with mesh (not box3D)
         const blockIntersect = blocksIntersect[0] //block target by raycast
-        let originBlock;
+        let targetBlock
         if (blockIntersect) {
-            originBlock = collisionCubes.find(block=>block.mesh === blockIntersect.object)//the real block from the list
+            targetBlock = collisionCubes.find(block=>block.mesh === blockIntersect.object)//the real block from the list
         }
        
         //draw ray
-        return originBlock
+        return {targetBlock,blockIntersect}
     }
-    let targetBlock = raycast()
+    let {targetBlock,blockIntersect} = raycast()
     //bordure au survol du bloc
     //si il y a un help précédent et si il avait un helper
     if (previousTargetBox && previousTargetBox.displayHelper) { 
@@ -314,37 +324,40 @@ function animate(){
         scene.remove(previousTargetBox.helper)
     }
     if (targetBlock) { //si il y a un bloc en cible
-        previousTargetBox = targetBlock
+        if (targetBlock !== previousTargetBox) {
+            previousTargetBox = targetBlock
+            //reset le bloc en cours de cassage
+            breakingTime = breakingDuration
+            scene.remove(crackMesh)
+            crackMesh = null
+        }
         if (!targetBlock.displayHelper) { //s'il n'y a pas de helper
             scene.add(targetBlock.helper)
             targetBlock.displayHelper = true
         }
-    } else {
+    } else {    
         previousTargetBox = null //si aucun bloc n'es dans le focus
     }
-    //left click event on block
-    //no tools at the moment
-
-    if (click[0]) {
-        if (targetBlock && targetBlock === previousTargetBox) {
-            if(breakingTime > 0) {
+    if (click[0]) { //left click
+        leftClickReleased = false
+        if (targetBlock) { //si le bloc cliqué existe
+            if(breakingTime > 0) { // si il reste du temps avant qu'il soit cassé
                 const progress = (breakingDuration - breakingTime) / breakingDuration // 0 --> 1
                 let crackIndex = Math.floor(progress*crackList.length)
                 crackIndex = Math.min(crackIndex,crackList.length - 1) // 0 --> 9
                 breakingTime -= delta;
                 if (previousCrackIndex !== crackIndex) {
                     previousCrackIndex = crackIndex
-                    if (previousCrackIndex == crackList.length - 1) {
-                        scene.remove(crackMesh)
+                    if (previousCrackIndex == crackList.length - 1) { // si le bloc est pret à se casser
+                        scene.remove(crackMesh) //remove le crack
                         scene.remove(targetBlock.mesh)
                         const index = collisionCubes.indexOf(targetBlock)
                         collisionCubes.splice(index,1)
                         crackMesh = null;
                         breakingTime = breakingDuration
-
                         return;
                     } else {
-                        if (!crackMesh) {
+                        if (!crackMesh) { // si crackMesh n'existe pas
                             crackMesh = new THREE.Mesh(targetBlock.mesh.geometry,crackList[crackIndex])
                             crackMesh.position.copy(targetBlock.mesh.position)
                             crackMesh.renderOrder = 999;
@@ -357,10 +370,28 @@ function animate(){
                     
                 }
             }
+        } else {
+            breakingTime = breakingDuration
+            previousCrackIndex = 0
+            if (crackMesh) {
+                scene.remove(crackMesh)
+                crackMesh = null
+            }
         }
-    } 
-    if (click[2]) {
-        console.log("right")
+    } else if(!leftClickReleased) { //if release 
+        leftClickReleased = true
+        //reset les texture du bloc fissuré en cours
+        breakingTime = breakingDuration //reset breaking time
+        previousCrackIndex = 0
+        if (crackMesh) {
+            scene.remove(crackMesh)
+            crackMesh = null
+        }
+    }
+    if (click[2]) { //right click
+        if (blockIntersect) {
+            console.log(blockIntersect.faceIndex)
+        }
     }
 
     //hotbar square move
@@ -383,7 +414,12 @@ function animate(){
 
         hotbarSquare.newPos(25*(-10 + hotbarPos*2) - 1,window.innerHeight-3)
     }
-
+    for (const key in keys) {
+        if (keys[key] === true && !isNaN(key) && key != 0) {
+            hotbarPos = key
+            hotbarSquare.newPos(25*(-10 + hotbarPos*2) - 1,window.innerHeight-3)
+        }
+    }
     //stats update
     stats.update()
     renderer.autoClear = false //prevent the autoclear
